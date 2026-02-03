@@ -49,6 +49,7 @@ pub mod history;
 pub mod llm;
 pub mod safety;
 pub mod tools;
+pub mod workspace;
 
 pub use config::Config;
 pub use error::{Error, Result};
@@ -62,4 +63,5 @@ pub mod prelude {
     pub use crate::llm::LlmProvider;
     pub use crate::safety::{SanitizedOutput, Sanitizer};
     pub use crate::tools::{Tool, ToolOutput, ToolRegistry};
+    pub use crate::workspace::{DocType, MemoryDocument, Workspace};
 }
