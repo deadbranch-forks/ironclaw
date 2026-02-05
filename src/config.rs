@@ -716,7 +716,7 @@ pub struct SandboxModeConfig {
 impl Default for SandboxModeConfig {
     fn default() -> Self {
         Self {
-            enabled: false, // Disabled by default
+            enabled: true, // Enabled by default
             policy: "readonly".to_string(),
             timeout_secs: 120,
             memory_limit_mb: 2048,
