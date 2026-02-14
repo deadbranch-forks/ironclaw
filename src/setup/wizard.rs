@@ -605,7 +605,12 @@ impl SetupWizard {
                     "openai" => return self.setup_openai().await,
                     "ollama" => return self.setup_ollama(),
                     "openai_compatible" => return self.setup_openai_compatible().await,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(SetupError::Config(format!(
+                            "Unhandled provider: {}",
+                            current
+                        )));
+                    }
                 }
             }
 
