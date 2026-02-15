@@ -1116,17 +1116,46 @@ impl SetupWizard {
             crypto
         };
 
-        // Create backend-appropriate secrets store
-        #[cfg(feature = "postgres")]
+        // Create backend-appropriate secrets store.
+        // Respect the user's selected backend when both features are compiled,
+        // so we don't accidentally use a postgres pool from DATABASE_URL when
+        // libsql was chosen (or vice versa).
+        let selected_backend = self
+            .settings
+            .database_backend
+            .as_deref()
+            .unwrap_or("postgres");
+
+        #[cfg(all(feature = "libsql", feature = "postgres"))]
         {
-            // Try postgres path first when postgres feature is available
+            if selected_backend == "libsql" {
+                if let Some(store) = self.create_libsql_secrets_store(&crypto)? {
+                    return Ok(SecretsContext::from_store(store, "default"));
+                }
+                if let Some(store) = self.create_postgres_secrets_store(&crypto).await? {
+                    return Ok(SecretsContext::from_store(store, "default"));
+                }
+            } else {
+                if let Some(store) = self.create_postgres_secrets_store(&crypto).await? {
+                    return Ok(SecretsContext::from_store(store, "default"));
+                }
+                if let Some(store) = self.create_libsql_secrets_store(&crypto)? {
+                    return Ok(SecretsContext::from_store(store, "default"));
+                }
+            }
+        }
+
+        #[cfg(all(feature = "postgres", not(feature = "libsql")))]
+        {
+            let _ = selected_backend;
             if let Some(store) = self.create_postgres_secrets_store(&crypto).await? {
                 return Ok(SecretsContext::from_store(store, "default"));
             }
         }
 
-        #[cfg(feature = "libsql")]
+        #[cfg(all(feature = "libsql", not(feature = "postgres")))]
         {
+            let _ = selected_backend;
             if let Some(store) = self.create_libsql_secrets_store(&crypto)? {
                 return Ok(SecretsContext::from_store(store, "default"));
             }

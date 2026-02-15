@@ -623,7 +623,7 @@ pub async fn setup_wasm_channel(
         print_success(&format!("{} saved to database", secret_config.name));
     }
 
-    // TODO(#XX): Substitute secrets into the validation URL and make a
+    // TODO: Substitute secrets into the validation URL and make a
     // GET request to verify the configured credentials actually work.
     if let Some(ref validation_endpoint) = setup.validation_endpoint {
         print_info(&format!(

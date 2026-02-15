@@ -883,7 +883,6 @@ impl std::fmt::Debug for SecretsConfig {
 /// Avoids re-prompting the OS keychain on every `SecretsConfig::resolve()` call
 /// (e.g. `Config::from_env()` then `Config::from_db()`). Thread-safe alternative
 /// to caching in a process env var.
-
 impl SecretsConfig {
     /// Auto-detect secrets master key from env var, then OS keychain.
     ///
@@ -1419,10 +1418,8 @@ fn optional_env(key: &str) -> Result<Option<String>, ConfigError> {
     }
 
     // Fall back to thread-safe overlay (secrets injected from DB)
-    if let Some(map) = INJECTED_VARS.get() {
-        if let Some(val) = map.get(key) {
-            return Ok(Some(val.clone()));
-        }
+    if let Some(val) = INJECTED_VARS.get().and_then(|map| map.get(key)) {
+        return Ok(Some(val.clone()));
     }
 
     Ok(None)
