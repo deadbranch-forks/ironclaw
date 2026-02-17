@@ -40,6 +40,8 @@ pub async fn bootstrap_hooks(
     workspace: Option<&Arc<Workspace>>,
     wasm_tools_dir: &Path,
     wasm_channels_dir: &Path,
+    active_tool_names: &[String],
+    active_channel_names: &[String],
 ) -> HookBootstrapSummary {
     let mut summary = HookBootstrapSummary::default();
 
@@ -48,7 +50,14 @@ pub async fn bootstrap_hooks(
     summary.outbound_webhooks += bundled.outbound_webhooks;
     summary.errors += bundled.errors;
 
-    let plugin = register_plugin_bundles(registry, wasm_tools_dir, wasm_channels_dir).await;
+    let plugin = register_plugin_bundles(
+        registry,
+        wasm_tools_dir,
+        wasm_channels_dir,
+        active_tool_names,
+        active_channel_names,
+    )
+    .await;
     summary.plugin_hooks += plugin.hooks;
     summary.outbound_webhooks += plugin.outbound_webhooks;
     summary.errors += plugin.errors;
@@ -67,44 +76,72 @@ async fn register_plugin_bundles(
     registry: &Arc<HookRegistry>,
     wasm_tools_dir: &Path,
     wasm_channels_dir: &Path,
+    active_tool_names: &[String],
+    active_channel_names: &[String],
 ) -> HookRegistrationSummary {
     let mut summary = HookRegistrationSummary::default();
-    let files = collect_plugin_capability_files(wasm_tools_dir, wasm_channels_dir).await;
+    let files = collect_plugin_capability_files(
+        wasm_tools_dir,
+        wasm_channels_dir,
+        active_tool_names,
+        active_channel_names,
+    )
+    .await;
 
     for (source, path) in files {
-        match load_plugin_bundle_from_capabilities_file(&path).await {
-            Ok(Some(bundle)) => {
-                let registered = register_bundle(registry, &source, bundle).await;
-                summary.merge(registered);
-            }
-            Ok(None) => {}
-            Err(err) => {
-                summary.errors += 1;
-                tracing::warn!(
-                    source = source,
-                    path = %path.display(),
-                    error = %err,
-                    "Skipping plugin hook bundle"
-                );
-            }
-        }
+        let registered =
+            register_plugin_bundle_from_capabilities_file(registry, &source, &path).await;
+        summary.merge(registered);
     }
 
     summary
 }
 
+/// Register a plugin hook bundle from a single capabilities file.
+///
+/// This is used by startup bootstrap and by runtime extension activation.
+pub async fn register_plugin_bundle_from_capabilities_file(
+    registry: &Arc<HookRegistry>,
+    source: &str,
+    path: &Path,
+) -> HookRegistrationSummary {
+    match load_plugin_bundle_from_capabilities_file(path).await {
+        Ok(Some(bundle)) => register_bundle(registry, source, bundle).await,
+        Ok(None) => HookRegistrationSummary::default(),
+        Err(err) => {
+            tracing::warn!(
+                source = source,
+                path = %path.display(),
+                error = %err,
+                "Skipping plugin hook bundle"
+            );
+            HookRegistrationSummary {
+                hooks: 0,
+                outbound_webhooks: 0,
+                errors: 1,
+            }
+        }
+    }
+}
+
 async fn collect_plugin_capability_files(
     wasm_tools_dir: &Path,
     wasm_channels_dir: &Path,
+    active_tool_names: &[String],
+    active_channel_names: &[String],
 ) -> Vec<(String, PathBuf)> {
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let active_tools: HashSet<&str> = active_tool_names.iter().map(String::as_str).collect();
+    let active_channels: HashSet<&str> = active_channel_names.iter().map(String::as_str).collect();
 
     if wasm_tools_dir.exists() {
         match discover_tools(wasm_tools_dir).await {
             Ok(tools) => {
                 for (name, tool) in tools {
-                    if let Some(path) = tool.capabilities_path {
+                    if let Some(path) = tool.capabilities_path
+                        && active_tools.contains(name.as_str())
+                    {
                         insert_unique(&mut files, &mut seen, format!("plugin.tool:{}", name), path);
                     }
                 }
@@ -122,7 +159,9 @@ async fn collect_plugin_capability_files(
     match discover_dev_tools().await {
         Ok(dev_tools) => {
             for (name, tool) in dev_tools {
-                if let Some(path) = tool.capabilities_path {
+                if let Some(path) = tool.capabilities_path
+                    && active_tools.contains(name.as_str())
+                {
                     insert_unique(
                         &mut files,
                         &mut seen,
@@ -141,7 +180,9 @@ async fn collect_plugin_capability_files(
         match discover_channels(wasm_channels_dir).await {
             Ok(channels) => {
                 for (name, channel) in channels {
-                    if let Some(path) = channel.capabilities_path {
+                    if let Some(path) = channel.capabilities_path
+                        && active_channels.contains(name.as_str())
+                    {
                         insert_unique(
                             &mut files,
                             &mut seen,
@@ -259,15 +300,10 @@ async fn register_workspace_bundles(
 }
 
 fn parse_workspace_bundle(value: &serde_json::Value) -> Result<HookBundleConfig, String> {
-    match HookBundleConfig::from_value(value) {
-        Ok(bundle) => Ok(bundle),
-        Err(primary_err) => {
-            if let Some(nested) = value.get("hooks") {
-                HookBundleConfig::from_value(nested).map_err(|e| e.to_string())
-            } else {
-                Err(primary_err.to_string())
-            }
-        }
+    if let Some(nested) = value.get("hooks") {
+        HookBundleConfig::from_value(nested).map_err(|e| e.to_string())
+    } else {
+        HookBundleConfig::from_value(value).map_err(|e| e.to_string())
     }
 }
 
@@ -311,5 +347,23 @@ mod tests {
         assert!(is_workspace_hook_file("hooks/redact.hook.json"));
         assert!(!is_workspace_hook_file("hooks/readme.md"));
         assert!(!is_workspace_hook_file("MEMORY.md"));
+    }
+
+    #[test]
+    fn test_parse_workspace_bundle_wrapped_hooks() {
+        let value = serde_json::json!({
+            "hooks": {
+                "rules": [
+                    {
+                        "name": "append-bang",
+                        "points": ["beforeInbound"],
+                        "append": "!"
+                    }
+                ]
+            }
+        });
+
+        let bundle = parse_workspace_bundle(&value).unwrap();
+        assert_eq!(bundle.rules.len(), 1);
     }
 }

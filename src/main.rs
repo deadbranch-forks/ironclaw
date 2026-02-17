@@ -631,6 +631,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mcp_session_manager = Arc::new(McpSessionManager::new());
 
+    // Create hook registry early so runtime extension activation can register hooks.
+    let hooks = Arc::new(HookRegistry::new());
+
     // Create WASM tool runtime (sync, just builds the wasmtime engine)
     let wasm_tool_runtime: Option<Arc<WasmToolRuntime>> =
         if config.wasm.enabled && config.wasm.tools_dir.exists() {
@@ -801,6 +804,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::clone(&mcp_session_manager),
             Arc::clone(secrets),
             Arc::clone(&tools),
+            Some(Arc::clone(&hooks)),
             wasm_tool_runtime.clone(),
             config.wasm.tools_dir.clone(),
             config.channels.wasm_channels_dir.clone(),
@@ -899,6 +903,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize channel manager
     let mut channels = ChannelManager::new();
     let mut channel_names: Vec<String> = Vec::new();
+    let mut loaded_wasm_channel_names: Vec<String> = Vec::new();
 
     if let Some(repl) = repl_channel {
         channels.add(Box::new(repl));
@@ -931,6 +936,7 @@ async fn main() -> anyhow::Result<()> {
 
                         for loaded in results.loaded {
                             let channel_name = loaded.name().to_string();
+                            loaded_wasm_channel_names.push(channel_name.clone());
                             tracing::info!("Loaded WASM channel: {}", channel_name);
 
                             let secret_name = loaded.webhook_secret_name();
@@ -1149,14 +1155,16 @@ async fn main() -> anyhow::Result<()> {
     // Create context manager (shared between job tools and agent)
     let context_manager = Arc::new(ContextManager::new(config.agent.max_parallel_jobs));
 
-    // Create hook registry and register bundled/plugin/workspace hooks.
-    let hooks = Arc::new(HookRegistry::new());
+    // Register bundled/plugin/workspace hooks.
+    let active_tool_names = tools.list().await;
 
     let hook_bootstrap = bootstrap_hooks(
         &hooks,
         workspace.as_ref(),
         &config.wasm.tools_dir,
         &config.channels.wasm_channels_dir,
+        &active_tool_names,
+        &loaded_wasm_channel_names,
     )
     .await;
     tracing::info!(
