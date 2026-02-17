@@ -22,7 +22,7 @@ use ironclaw::{
     config::Config,
     context::ContextManager,
     extensions::ExtensionManager,
-    hooks::HookRegistry,
+    hooks::{HookRegistry, bootstrap_hooks},
     llm::{
         CooldownConfig, FailoverProvider, LlmProvider, SessionConfig, create_cheap_llm_provider,
         create_llm_provider, create_llm_provider_with_config, create_session_manager,
@@ -1149,8 +1149,24 @@ async fn main() -> anyhow::Result<()> {
     // Create context manager (shared between job tools and agent)
     let context_manager = Arc::new(ContextManager::new(config.agent.max_parallel_jobs));
 
-    // Create hook registry
+    // Create hook registry and register bundled/plugin/workspace hooks.
     let hooks = Arc::new(HookRegistry::new());
+
+    let hook_bootstrap = bootstrap_hooks(
+        &hooks,
+        workspace.as_ref(),
+        &config.wasm.tools_dir,
+        &config.channels.wasm_channels_dir,
+    )
+    .await;
+    tracing::info!(
+        bundled = hook_bootstrap.bundled_hooks,
+        plugin = hook_bootstrap.plugin_hooks,
+        workspace = hook_bootstrap.workspace_hooks,
+        outbound_webhooks = hook_bootstrap.outbound_webhooks,
+        errors = hook_bootstrap.errors,
+        "Lifecycle hooks initialized"
+    );
 
     // Create session manager (shared between agent and web gateway)
     let session_manager = Arc::new(SessionManager::new().with_hooks(hooks.clone()));
