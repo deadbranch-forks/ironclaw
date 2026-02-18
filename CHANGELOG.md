@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/nearai/ironclaw/compare/ironclaw-v0.5.0...ironclaw-v0.6.0) - 2026-02-18
+
+### Added
+
+- add Tinfoil private inference provider ([#62](https://github.com/nearai/ironclaw/pull/62))
+- shell env scrubbing and command injection detection ([#164](https://github.com/nearai/ironclaw/pull/164))
+- Add PR review tools, job monitor, and channel injection for E2E sandbox workflows ([#57](https://github.com/nearai/ironclaw/pull/57))
+- Secure prompt-based skills system (Phases 1-4) ([#51](https://github.com/nearai/ironclaw/pull/51))
+- Add benchmarking harness with spot suite ([#10](https://github.com/nearai/ironclaw/pull/10))
+- 10 infrastructure improvements from zeroclaw ([#126](https://github.com/nearai/ironclaw/pull/126))
+
+### Fixed
+
+- skills module audit cleanup ([#173](https://github.com/nearai/ironclaw/pull/173))
+
+### Other
+
+- add .env.example examples for Ollama and OpenAI-compatible ([#110](https://github.com/nearai/ironclaw/pull/110))
+
 ## [0.5.0](https://github.com/nearai/ironclaw/compare/v0.4.0...v0.5.0) - 2026-02-17
 
 ### Added
