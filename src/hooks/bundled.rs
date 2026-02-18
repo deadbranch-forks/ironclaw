@@ -1,7 +1,7 @@
 //! Bundled hook implementations and declarative hook registration.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -658,19 +658,19 @@ fn validate_webhook_url(hook_name: &str, url: &str) -> Result<reqwest::Url, Hook
     }
 
     if let Some(host) = parsed.host_str() {
-        if is_forbidden_webhook_host(host) {
-            return Err(HookBundleError::ForbiddenWebhookHost {
-                hook: hook_name.to_string(),
-                host: host.to_string(),
-            });
-        }
+        let normalized_host = normalize_host(host);
 
-        if let Ok(ip) = host.parse::<IpAddr>()
-            && is_forbidden_ip(ip)
-        {
+        if let Ok(ip) = normalized_host.parse::<IpAddr>() {
+            if is_forbidden_ip(ip) {
+                return Err(HookBundleError::ForbiddenWebhookHost {
+                    hook: hook_name.to_string(),
+                    host: normalized_host.to_string(),
+                });
+            }
+        } else if is_forbidden_webhook_host(normalized_host) {
             return Err(HookBundleError::ForbiddenWebhookHost {
                 hook: hook_name.to_string(),
-                host: host.to_string(),
+                host: normalized_host.to_string(),
             });
         }
     }
@@ -687,8 +687,9 @@ async fn dispatch_client_for_target(
     let host = parsed
         .host_str()
         .ok_or_else(|| "Webhook URL has no host".to_string())?;
+    let normalized_host = normalize_host(host);
 
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Ok(ip) = normalized_host.parse::<IpAddr>() {
         if is_forbidden_ip(ip) {
             return Err(format!("Webhook target resolves to blocked IP {ip}"));
         }
@@ -699,7 +700,7 @@ async fn dispatch_client_for_target(
         .port_or_known_default()
         .ok_or_else(|| "Webhook URL has no valid port".to_string())?;
 
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((normalized_host, port))
         .await
         .map_err(|e| format!("DNS resolution failed: {e}"))?
         .collect();
@@ -717,9 +718,13 @@ async fn dispatch_client_for_target(
     reqwest::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
-        .resolve_to_addrs(host, &addrs)
+        .resolve_to_addrs(normalized_host, &addrs)
         .build()
         .map_err(|e| format!("Failed to build resolved webhook client: {e}"))
+}
+
+fn normalize_host(host: &str) -> &str {
+    host.trim_start_matches('[').trim_end_matches(']')
 }
 
 fn validate_webhook_headers(
@@ -768,33 +773,12 @@ fn is_forbidden_webhook_host(host: &str) -> bool {
 
 fn is_forbidden_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            if v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.is_unspecified()
-                || v4.is_multicast()
-            {
-                return true;
-            }
-
-            let octets = v4.octets();
-
-            // Carrier-grade NAT range (100.64.0.0/10).
-            if octets[0] == 100 && (64..=127).contains(&octets[1]) {
-                return true;
-            }
-
-            // Benchmark testing range (198.18.0.0/15).
-            if octets[0] == 198 && matches!(octets[1], 18 | 19) {
-                return true;
-            }
-
-            false
-        }
+        IpAddr::V4(v4) => is_forbidden_ipv4(v4),
         IpAddr::V6(v6) => {
+            if let Some(mapped) = ipv6_mapped_ipv4(v6) {
+                return is_forbidden_ipv4(mapped);
+            }
+
             if v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
@@ -809,6 +793,53 @@ fn is_forbidden_ip(ip: IpAddr) -> bool {
             segments[0] == 0x2001 && segments[1] == 0x0db8
         }
     }
+}
+
+fn ipv6_mapped_ipv4(v6: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = v6.segments();
+    if segments[0] == 0
+        && segments[1] == 0
+        && segments[2] == 0
+        && segments[3] == 0
+        && segments[4] == 0
+        && segments[5] == 0xffff
+    {
+        Some(Ipv4Addr::new(
+            (segments[6] >> 8) as u8,
+            segments[6] as u8,
+            (segments[7] >> 8) as u8,
+            segments[7] as u8,
+        ))
+    } else {
+        None
+    }
+}
+
+fn is_forbidden_ipv4(v4: Ipv4Addr) -> bool {
+    if v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_documentation()
+        || v4.is_unspecified()
+        || v4.is_multicast()
+    {
+        return true;
+    }
+
+    let octets = v4.octets();
+
+    // Carrier-grade NAT range (100.64.0.0/10).
+    if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+        return true;
+    }
+
+    // Benchmark testing range (198.18.0.0/15).
+    if octets[0] == 198 && matches!(octets[1], 18 | 19) {
+        return true;
+    }
+
+    false
 }
 
 fn is_forbidden_header(name: &str) -> bool {
@@ -1041,6 +1072,23 @@ mod tests {
             name: "notify".to_string(),
             points: vec![HookPoint::BeforeInbound],
             url: "https://127.0.0.1/hook".to_string(),
+            headers: HashMap::new(),
+            timeout_ms: None,
+            priority: None,
+            max_in_flight: None,
+        };
+
+        let err =
+            OutboundWebhookHook::from_config("workspace:hooks/hooks.json", config).unwrap_err();
+        assert!(matches!(err, HookBundleError::ForbiddenWebhookHost { .. }));
+    }
+
+    #[test]
+    fn test_mapped_ipv4_webhook_host_rejected() {
+        let config = OutboundWebhookConfig {
+            name: "notify".to_string(),
+            points: vec![HookPoint::BeforeInbound],
+            url: "https://[::ffff:127.0.0.1]/hook".to_string(),
             headers: HashMap::new(),
             timeout_ms: None,
             priority: None,
