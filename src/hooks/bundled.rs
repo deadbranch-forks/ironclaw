@@ -711,7 +711,10 @@ async fn dispatch_client_for_target(
 
     for addr in &addrs {
         if is_forbidden_ip(addr.ip()) {
-            return Err(format!("Webhook target resolves to blocked IP {}", addr.ip()));
+            return Err(format!(
+                "Webhook target resolves to blocked IP {}",
+                addr.ip()
+            ));
         }
     }
 
@@ -1151,17 +1154,20 @@ mod tests {
             "https://127.0.0.1/hook",
             Duration::from_secs(1),
         )
-            .await
-            .unwrap_err();
+        .await
+        .unwrap_err();
         assert!(err.contains("blocked IP"));
     }
 
     #[tokio::test]
     async fn test_runtime_target_validation_allows_public_ip() {
         let base_client = reqwest::Client::builder().build().unwrap();
-        let result =
-            dispatch_client_for_target(&base_client, "https://1.1.1.1/hook", Duration::from_secs(1))
-                .await;
+        let result = dispatch_client_for_target(
+            &base_client,
+            "https://1.1.1.1/hook",
+            Duration::from_secs(1),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
