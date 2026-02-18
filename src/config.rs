@@ -1478,6 +1478,8 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, val: &str) -> Self {
             let original = std::env::var(key).ok();
+            // SAFETY: Only used in tests. The two test functions that use EnvGuard
+            // operate on disjoint env var sets, so parallel execution is safe.
             unsafe {
                 std::env::set_var(key, val);
             }
@@ -1486,6 +1488,7 @@ mod tests {
 
         fn clear(key: &'static str) -> Self {
             let original = std::env::var(key).ok();
+            // SAFETY: Only used in tests. See comment in `set()`.
             unsafe {
                 std::env::remove_var(key);
             }
@@ -1495,6 +1498,8 @@ mod tests {
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
+            // SAFETY: Restores the original env var value captured at construction.
+            // Only runs in test context; see comment in `set()`.
             unsafe {
                 if let Some(ref val) = self.original {
                     std::env::set_var(self.key, val);
@@ -1550,5 +1555,4 @@ mod tests {
             "embeddings should be enabled when settings.enabled=true"
         );
     }
-
 }
